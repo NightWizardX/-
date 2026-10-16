@@ -1,6 +1,9 @@
 package com.nwx.expensetracker
 
+import android.content.ContentResolver
+import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -15,6 +18,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -23,6 +28,7 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.IntentCompat
 import com.nwx.expensetracker.data.Period
 import com.nwx.expensetracker.data.PeriodType
 import com.nwx.expensetracker.data.Repository
@@ -31,15 +37,36 @@ import com.nwx.expensetracker.ui.CategoriesScreen
 import com.nwx.expensetracker.ui.DashboardScreen
 import com.nwx.expensetracker.ui.EditExpenseScreen
 import com.nwx.expensetracker.ui.SettingsScreen
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.time.LocalDate
 
 class MainActivity : ComponentActivity() {
+    /** A slip image shared to the app ("แชร์" → บันทึกรายจ่าย), waiting to be opened. */
+    private val sharedSlip = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // After a restart the saved screen stack already holds the shared slip.
+        if (savedInstanceState == null) sharedSlip.value = slipFrom(intent)
         setContent {
-            AppTheme { App() }
+            AppTheme { App(sharedSlip) }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        slipFrom(intent)?.let { sharedSlip.value = it }
+    }
+
+    private fun slipFrom(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_SEND || intent.type?.startsWith("image/") != true) return null
+        // Only content:// (the sharing app grants access to that one item); a file:// path could
+        // point into this app's private storage.
+        return IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            ?.takeIf { it.scheme == ContentResolver.SCHEME_CONTENT }
+            ?.toString()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -58,8 +85,10 @@ private sealed interface Screen {
         override val route = "dashboard"
     }
 
-    data class Edit(val expenseId: Long?, val date: LocalDate) : Screen {
-        override val route: String get() = "edit/${expenseId ?: "new"}/$date"
+    /** [slip]: URI of a slip image to read into the new expense. */
+    data class Edit(val expenseId: Long?, val date: LocalDate, val slip: String? = null) : Screen {
+        override val route: String
+            get() = "edit/${expenseId ?: "new"}/$date" + (slip?.let { "/slip/" + URLEncoder.encode(it, "UTF-8") } ?: "")
     }
 
     data object Settings : Screen {
@@ -77,7 +106,10 @@ private sealed interface Screen {
             route == Categories.route -> Categories
             route.startsWith("edit/") -> {
                 val parts = route.split('/')
-                runCatching { Edit(parts[1].toLongOrNull(), LocalDate.parse(parts[2])) }.getOrNull()
+                runCatching {
+                    val slip = if (parts.getOrNull(3) == "slip") URLDecoder.decode(parts[4], "UTF-8") else null
+                    Edit(parts[1].toLongOrNull(), LocalDate.parse(parts[2]), slip)
+                }.getOrNull()
             }
             else -> null
         }
@@ -97,7 +129,7 @@ private val PeriodSaver = listSaver<Period, String>(
 )
 
 @Composable
-private fun App() {
+private fun App(sharedSlip: MutableState<String?>) {
     val context = LocalContext.current
     val repo = remember { Repository.get(context) }
     var stack by rememberSaveable(stateSaver = StackSaver) { mutableStateOf(listOf<Screen>(Screen.Dashboard)) }
@@ -115,6 +147,15 @@ private fun App() {
     }
 
     BackHandler(enabled = stack.size > 1) { pop() }
+
+    val slip = sharedSlip.value
+    LaunchedEffect(slip) {
+        if (slip != null) {
+            // The same image shared twice opens once.
+            if (stack.none { it is Screen.Edit && it.slip == slip }) push(Screen.Edit(null, LocalDate.now(), slip))
+            sharedSlip.value = null
+        }
+    }
 
     // Slide screens in from the right when going forward, back to the right when going back.
     AnimatedContent(
@@ -147,6 +188,7 @@ private fun App() {
                     val date = if (period.type == PeriodType.DAY) period.start else LocalDate.now()
                     push(Screen.Edit(null, date))
                 },
+                onSlip = { push(Screen.Edit(null, LocalDate.now(), it.toString())) },
                 onEdit = { push(Screen.Edit(it, LocalDate.now())) },
                 onSettings = { push(Screen.Settings) },
             )
@@ -154,6 +196,7 @@ private fun App() {
                 EditExpenseScreen(
                     expenseId = screen.expenseId,
                     defaultDate = screen.date,
+                    slipUri = screen.slip,
                     onDone = ::pop,
                 )
             }

@@ -138,6 +138,24 @@ class Repository private constructor(context: Context) {
 
     fun expense(id: Long): Expense? = readExpenses("WHERE id = ?", arrayOf(id.toString())).firstOrNull()
 
+    /** Another expense of [amount] within two minutes of [time]: probably the same payment. */
+    fun similarExpense(amount: Long, time: Long, exceptId: Long): Expense? =
+        readExpenses(
+            "WHERE amount = ? AND time BETWEEN ? AND ? AND id != ?",
+            arrayOf(amount.toString(), (time - 120_000).toString(), (time + 120_000).toString(), exceptId.toString()),
+        ).firstOrNull()
+
+    /** The category of the latest expense whose note mentions [text] (say, a slip's receiver). */
+    fun categoryForNote(text: String): Long? {
+        if (text.isBlank()) return null
+        val pattern = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        return helper.readableDatabase.rawQuery(
+            "SELECT e.category_id FROM expenses e JOIN categories c ON c.id = e.category_id " +
+                "WHERE c.hidden = 0 AND e.note LIKE ? ESCAPE '\\' ORDER BY e.time DESC LIMIT 1",
+            arrayOf(pattern),
+        ).use { if (it.moveToFirst()) it.getLong(0) else null }
+    }
+
     fun total(startMs: Long, endMs: Long): Long =
         helper.readableDatabase.rawQuery(
             "SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE time >= ? AND time < ?",

@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">บันทึกรายจ่าย</string>
+    <string name="share_slip">บันทึกรายจ่ายจากสลิป</string>
 </resources>

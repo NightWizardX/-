@@ -1,5 +1,9 @@
 package com.nwx.expensetracker.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateColorAsState
@@ -66,6 +70,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -132,6 +137,7 @@ fun DashboardScreen(
     listState: LazyListState,
     onPeriodChange: (Period) -> Unit,
     onAdd: () -> Unit,
+    onSlip: (Uri) -> Unit,
     onEdit: (Long) -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -149,6 +155,9 @@ fun DashboardScreen(
     // Rows already animated in for this period, so scrolling back doesn't replay the entrance.
     val seenRows = remember(period) { mutableSetOf<Long>() }
     var dragX by remember { mutableFloatStateOf(0f) }
+    val slipPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let(onSlip)
+    }
 
     val shift: (Int) -> Unit = { n ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -180,12 +189,18 @@ fun DashboardScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onAdd,
-                expanded = listState.firstVisibleItemIndex < 2,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("บันทึกรายจ่าย") },
-            )
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SmallFloatingActionButton(
+                    onClick = { slipPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) { Icon(ReceiptIcon, contentDescription = "บันทึกจากรูปสลิป") }
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    expanded = listState.firstVisibleItemIndex < 2,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("บันทึกรายจ่าย") },
+                )
+            }
         },
     ) { padding ->
         LazyColumn(

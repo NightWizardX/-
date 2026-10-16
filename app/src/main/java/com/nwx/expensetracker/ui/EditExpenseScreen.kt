@@ -1,6 +1,16 @@
 package com.nwx.expensetracker.ui
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -13,6 +23,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -27,6 +39,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +60,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -58,11 +72,15 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.nwx.expensetracker.data.Bank
 import com.nwx.expensetracker.data.Category
 import com.nwx.expensetracker.data.Expense
 import com.nwx.expensetracker.data.MAX_NOTE_LENGTH
 import com.nwx.expensetracker.data.Money
 import com.nwx.expensetracker.data.Repository
+import com.nwx.expensetracker.data.SlipInfo
+import com.nwx.expensetracker.data.SlipReadException
+import com.nwx.expensetracker.data.SlipReader
 import com.nwx.expensetracker.data.TIME_FORMAT
 import com.nwx.expensetracker.data.ThaiDate
 import com.nwx.expensetracker.data.safeTake
@@ -70,7 +88,9 @@ import com.nwx.expensetracker.data.toLocalDateTime
 import com.nwx.expensetracker.data.toMillis
 import com.nwx.expensetracker.data.toUtcMillis
 import com.nwx.expensetracker.data.utcToLocalDate
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,9 +103,30 @@ private val LocalDateTimeSaver = Saver<LocalDateTime, String>(
     restore = { runCatching { LocalDateTime.parse(it) }.getOrNull() },
 )
 
+/** Keeps what was read from a slip across process death (the card and the duplicate check use it). */
+private val SlipSaver = listSaver<SlipInfo?, String>(
+    save = { info ->
+        if (info == null) emptyList() else listOf(
+            info.amount?.toString().orEmpty(), info.date?.toString().orEmpty(), info.time?.toString().orEmpty(),
+            info.bank?.name.orEmpty(), info.receiver.orEmpty(), info.memo.orEmpty(),
+        )
+    },
+    restore = { v ->
+        if (v.size != 6) null else SlipInfo(
+            amount = v[0].toLongOrNull(),
+            date = runCatching { LocalDate.parse(v[1]) }.getOrNull(),
+            time = runCatching { LocalTime.parse(v[2]) }.getOrNull(),
+            bank = Bank.entries.firstOrNull { it.name == v[3] },
+            receiver = v[4].ifEmpty { null },
+            memo = v[5].ifEmpty { null },
+        )
+    },
+)
+
+/** [slipUri]: a slip image to read as soon as the screen opens (picked on the dashboard or shared from another app). */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Unit) {
+fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, slipUri: String?, onDone: () -> Unit) {
     val context = LocalContext.current
     val repo = remember { Repository.get(context) }
     val scope = rememberCoroutineScope()
@@ -106,6 +147,13 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
     var amountError by remember { mutableStateOf(false) }
     // Guards against a double tap (or IME Done + button) inserting the same expense twice.
     var saving by remember { mutableStateOf(false) }
+    // Slip reading: the last result, the note it filled in (replaced by the next slip unless the
+    // user edited it), whether [slipUri] has been read, and the running OCR job.
+    var slip by rememberSaveable(stateSaver = SlipSaver) { mutableStateOf<SlipInfo?>(null) }
+    var slipNote by rememberSaveable { mutableStateOf("") }
+    var slipUriRead by rememberSaveable { mutableStateOf(slipUri == null) }
+    var reading by remember { mutableStateOf<Job?>(null) }
+    var duplicate by remember { mutableStateOf<Expense?>(null) }
 
     val categories by produceState(emptyList<Category>()) {
         value = withContext(Dispatchers.IO) { repo.categories() }
@@ -127,7 +175,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
             note = e.note
             dateTime = e.time.toLocalDateTime()
             loaded = true
-        } else {
+        } else if (slipUri == null) {
             delay(150)
             runCatching { amountFocus.requestFocus() }
         }
@@ -141,8 +189,60 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
         }
     }
 
+    suspend fun applySlip(info: SlipInfo) {
+        info.amount?.let {
+            amountText = Money.input(it)
+            amountError = false
+        }
+        val date = info.date
+        when {
+            date != null -> dateTime = LocalDateTime.of(date, info.time ?: dateTime.toLocalTime())
+            info.time != null -> dateTime = LocalDateTime.of(dateTime.toLocalDate(), info.time)
+        }
+        val slipText = safeTake(info.note(), MAX_NOTE_LENGTH)
+        if (note.isBlank() || note == slipNote) note = slipText
+        slipNote = slipText
+        // Paid this receiver before? Use the same category as last time.
+        info.receiver?.let { r -> withContext(Dispatchers.IO) { repo.categoryForNote(r) } }?.let { categoryId = it }
+        slip = info
+    }
+
+    fun readSlip(uri: Uri) {
+        if (reading != null) return
+        reading = scope.launch {
+            try {
+                applySlip(SlipReader.read(context, uri))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Throwable: an unusual device could also fail to load the OCR library itself.
+                val message = if (e is SlipReadException && e.badImage) "เปิดรูปนี้ไม่ได้ ลองเลือกรูปอีกครั้ง" else "อ่านสลิปไม่สำเร็จ"
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            } finally {
+                reading = null
+                slipUriRead = true
+            }
+        }
+    }
+
+    val slipPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { readSlip(it) }
+    }
+    fun pickSlip() = slipPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+
+    LaunchedEffect(Unit) {
+        if (!slipUriRead && slipUri != null) readSlip(Uri.parse(slipUri))
+    }
+    // Warn when the slip seems to be recorded already (same amount within two minutes).
+    LaunchedEffect(slip, amountText, dateTime) {
+        val amount = Money.parse(amountText)
+        duplicate = if (slip == null || amount == null) null else withContext(Dispatchers.IO) {
+            repo.similarExpense(amount, dateTime.toMillis(), expenseId ?: 0L)
+        }
+    }
+
     fun save() {
-        if (saving || !loaded) return
+        if (saving || !loaded || reading != null) return
         val amount = Money.parse(amountText)
         if (amount == null) {
             amountError = true
@@ -191,7 +291,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
         bottomBar = {
             Button(
                 onClick = { save() },
-                enabled = loaded && !saving,
+                enabled = loaded && !saving && reading == null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
@@ -209,6 +309,25 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (isNew) {
+                AnimatedContent(
+                    targetState = slip,
+                    transitionSpec = { (fadeIn() + expandVertically()) togetherWith (fadeOut() + shrinkVertically()) },
+                    contentKey = { it != null },
+                    label = "slip",
+                    modifier = Modifier.padding(top = 8.dp),
+                ) { info ->
+                    if (info == null) {
+                        FilledTonalButton(onClick = ::pickSlip, modifier = Modifier.fillMaxWidth()) {
+                            Icon(ReceiptIcon, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("อ่านจากรูปสลิปโอนเงิน")
+                        }
+                    } else {
+                        SlipCard(info, duplicate, onPickAnother = ::pickSlip)
+                    }
+                }
+            }
             OutlinedTextField(
                 value = amountText,
                 onValueChange = { input ->
@@ -229,7 +348,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
                 keyboardActions = KeyboardActions(onDone = { save() }),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp)
+                    .padding(top = if (isNew) 0.dp else 8.dp)
                     .focusRequester(amountFocus),
             )
 
@@ -281,6 +400,8 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
             Spacer(Modifier.height(8.dp))
         }
     }
+
+    if (reading != null) SlipScanDialog(onCancel = { reading?.cancel() })
 
     if (showDate) {
         val state = rememberDatePickerState(initialSelectedDateMillis = dateTime.toLocalDate().toUtcMillis())

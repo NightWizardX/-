@@ -23,6 +23,8 @@ android {
         targetSdk = 35
         versionCode = buildNumber
         versionName = "1.0.$buildNumber"
+        // Phones are ARM; leaving out x86 builds of the OCR library keeps the APK smaller.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {
@@ -76,6 +78,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Reading bank slips on the device: OCR (Thai + English traineddata in assets/tessdata) and the slip QR.
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
 }
