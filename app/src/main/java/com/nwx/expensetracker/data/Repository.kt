@@ -164,6 +164,18 @@ class Repository private constructor(context: Context) {
         return id
     }
 
+    /** Re-inserts a deleted expense with its original id (used by "undo"). */
+    fun restoreExpense(e: Expense) {
+        helper.writableDatabase.insert("expenses", null, ContentValues().apply {
+            put("id", e.id)
+            put("amount", e.amount)
+            put("category_id", e.categoryId)
+            put("note", e.note)
+            put("time", e.time)
+        })
+        changed()
+    }
+
     fun deleteExpense(id: Long) {
         helper.writableDatabase.delete("expenses", "id = ?", arrayOf(id.toString()))
         changed()
