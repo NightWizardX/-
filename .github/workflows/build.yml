@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      signed: ${{ steps.key.outputs.signed }}
+      signed: ${{ steps.build.outputs.signed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,24 +30,34 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
-      - name: Prepare release signing key
-        id: key
+      - name: Test and build release APK
+        id: build
         env:
           KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 --decode --ignore-garbage > "$RUNNER_TEMP/release.p12"
-            echo "SIGNING_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+          KS="$KEYSTORE_BASE64"
+          PW="$(printf '%s' "$KEY_PASSWORD" | tr -d '[:space:]')"
+          if [ -n "$KS" ]; then
+            # Easy mix-up when pasting on a phone: the two values end up in each other's secret.
+            if [ "${#KS}" -lt 200 ] && [ "${#PW}" -ge 200 ]; then
+              echo "::warning::SIGNING_KEYSTORE_BASE64 and SIGNING_PASSWORD look swapped; using them the other way round. Please swap them in the repository settings."
+              SWAP="$KS"; KS="$PW"; PW="$(printf '%s' "$SWAP" | tr -d '[:space:]')"
+            fi
+            # Tolerate extra words pasted around the value (e.g. a "Name: ..." line): use the one long token.
+            LONG="$(printf '%s' "$KS" | tr -s '[:space:]' '\n' | awk 'length >= 1000 && !found { print; found = 1 }')"
+            if [ -n "$LONG" ]; then KS="$LONG"; fi
+            printf '%s' "$KS" | base64 --decode --ignore-garbage > "$RUNNER_TEMP/release.p12" 2>/dev/null || true
+            if ! keytool -list -keystore "$RUNNER_TEMP/release.p12" -storetype PKCS12 -storepass "$PW" -alias expense-tracker > /dev/null 2>&1; then
+              echo "::error::The signing secrets don't open the keystore. SIGNING_KEYSTORE_BASE64 has ${#KS} characters (it should be several thousand, starting with MII); re-paste both secrets from SIGNING_KEYSTORE_BASE64.txt and SIGNING_PASSWORD.txt."
+              exit 1
+            fi
+            export SIGNING_KEYSTORE_FILE="$RUNNER_TEMP/release.p12" SIGNING_STORE_PASSWORD="$PW"
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Secret SIGNING_KEYSTORE_BASE64 is not set: this APK is signed with a throwaway key, so it is kept as a run artifact and not published as a release. See README."
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Test and build release APK
-        env:
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: |
           gradle testReleaseUnitTest assembleRelease --stacktrace
           cp app/build/outputs/apk/release/app-release.apk expense-tracker.apk
 
