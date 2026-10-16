@@ -186,7 +186,9 @@ object SlipReader {
         val source = RGBLuminanceSource(w, h, pixels)
         val hints = mapOf(DecodeHintType.TRY_HARDER to true, DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE))
         val reader = QRCodeReader()
-        for (binarizer in listOf(HybridBinarizer(source), GlobalHistogramBinarizer(source))) {
+        // Dark-themed slips have a light-on-dark QR, which ZXing only reads inverted.
+        val attempts = listOf(source, source.invert()).flatMap { listOf(HybridBinarizer(it), GlobalHistogramBinarizer(it)) }
+        for (binarizer in attempts) {
             try {
                 val result = reader.decode(BinaryBitmap(binarizer), hints)
                 val points = result.resultPoints.orEmpty().filterNotNull()
@@ -210,14 +212,23 @@ object SlipReader {
 
     private class Page(val gray: ByteArray, val width: Int, val height: Int)
 
-    /** 8-bit grey image for OCR, with transparency shown as white and the QR blanked out. */
+    /**
+     * 8-bit grey image for OCR: transparency shown as white, a dark-themed slip turned into dark
+     * text on a light page (what OCR reads best), and the QR blanked out.
+     */
     private fun grayPage(w: Int, h: Int, pixels: IntArray, qrBox: Rect?): Page {
         val gray = ByteArray(w * h)
+        var sum = 0L
         for (i in pixels.indices) {
             val p = pixels[i]
             val a = p ushr 24
             val lum = ((p shr 16 and 0xFF) * 299 + (p shr 8 and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
-            gray[i] = ((lum * a + 255 * (255 - a)) / 255).toByte()
+            val v = (lum * a + 255 * (255 - a)) / 255
+            gray[i] = v.toByte()
+            sum += v
+        }
+        if (sum < 128L * gray.size) {
+            for (i in gray.indices) gray[i] = (255 - (gray[i].toInt() and 0xFF)).toByte()
         }
         qrBox?.let { box ->
             for (y in box.top until box.bottom) java.util.Arrays.fill(gray, y * w + box.left, y * w + box.right, 0xFF.toByte())
