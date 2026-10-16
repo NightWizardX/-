@@ -1,0 +1,41 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew testReleaseUnitTest assembleRelease --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk expense-tracker.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: expense-tracker-apk
+          path: expense-tracker.apk
+
+      - name: Publish to the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Expense Tracker (latest build)
+          body: "APK ล่าสุดจาก commit ${{ github.sha }} — ดาวน์โหลด expense-tracker.apk แล้วติดตั้งบนมือถือ Android"
+          prerelease: false
+          files: expense-tracker.apk
