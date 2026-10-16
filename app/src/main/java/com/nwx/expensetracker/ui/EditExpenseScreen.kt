@@ -46,6 +46,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -58,9 +60,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.nwx.expensetracker.data.Category
 import com.nwx.expensetracker.data.Expense
+import com.nwx.expensetracker.data.MAX_NOTE_LENGTH
 import com.nwx.expensetracker.data.Money
 import com.nwx.expensetracker.data.Repository
+import com.nwx.expensetracker.data.TIME_FORMAT
 import com.nwx.expensetracker.data.ThaiDate
+import com.nwx.expensetracker.data.safeTake
 import com.nwx.expensetracker.data.toLocalDateTime
 import com.nwx.expensetracker.data.toMillis
 import com.nwx.expensetracker.data.toUtcMillis
@@ -72,9 +77,11 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 
-private val TIME_FMT = DateTimeFormatter.ofPattern("HH:mm")
+private val LocalDateTimeSaver = Saver<LocalDateTime, String>(
+    save = { it.toString() },
+    restore = { runCatching { LocalDateTime.parse(it) }.getOrNull() },
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -84,17 +91,21 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
     val scope = rememberCoroutineScope()
     val isNew = expenseId == null
 
-    var loaded by remember { mutableStateOf(isNew) }
-    var amountText by remember { mutableStateOf("") }
-    var categoryId by remember { mutableStateOf(0L) }
-    var note by remember { mutableStateOf("") }
-    var dateTime by remember {
+    // The form survives the app being killed in the background (rememberSaveable), so a
+    // half-typed entry is still there when the user comes back.
+    var loaded by rememberSaveable { mutableStateOf(isNew) }
+    var amountText by rememberSaveable { mutableStateOf("") }
+    var categoryId by rememberSaveable { mutableStateOf(0L) }
+    var note by rememberSaveable { mutableStateOf("") }
+    var dateTime by rememberSaveable(stateSaver = LocalDateTimeSaver) {
         mutableStateOf(LocalDateTime.of(defaultDate, LocalTime.now().withSecond(0).withNano(0)))
     }
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var amountError by remember { mutableStateOf(false) }
+    // Guards against a double tap (or IME Done + button) inserting the same expense twice.
+    var saving by remember { mutableStateOf(false) }
 
     val categories by produceState(emptyList<Category>()) {
         value = withContext(Dispatchers.IO) { repo.categories() }
@@ -103,13 +114,18 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
 
     LaunchedEffect(expenseId) {
         if (expenseId != null) {
+            // Already loaded means the form was restored with the user's unsaved edits; keep them.
+            if (loaded) return@LaunchedEffect
             val e = withContext(Dispatchers.IO) { repo.expense(expenseId) }
-            if (e != null) {
-                amountText = Money.input(e.amount)
-                categoryId = e.categoryId
-                note = e.note
-                dateTime = e.time.toLocalDateTime()
+            if (e == null) {
+                Toast.makeText(context, "ไม่พบรายการนี้แล้ว", Toast.LENGTH_SHORT).show()
+                onDone()
+                return@LaunchedEffect
             }
+            amountText = Money.input(e.amount)
+            categoryId = e.categoryId
+            note = e.note
+            dateTime = e.time.toLocalDateTime()
             loaded = true
         } else {
             delay(150)
@@ -126,6 +142,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
     }
 
     fun save() {
+        if (saving || !loaded) return
         val amount = Money.parse(amountText)
         if (amount == null) {
             amountError = true
@@ -142,6 +159,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
             note = note.trim(),
             time = dateTime.toMillis(),
         )
+        saving = true
         scope.launch {
             withContext(Dispatchers.IO) {
                 repo.saveExpense(expense)
@@ -173,7 +191,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
         bottomBar = {
             Button(
                 onClick = { save() },
-                enabled = loaded,
+                enabled = loaded && !saving,
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
@@ -231,7 +249,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
 
             OutlinedTextField(
                 value = note,
-                onValueChange = { note = it },
+                onValueChange = { note = safeTake(it, MAX_NOTE_LENGTH) },
                 label = { Text("บันทึกช่วยจำ (ไม่บังคับ)") },
                 placeholder = { Text("เช่น ข้าวมันไก่, ค่า BTS") },
                 singleLine = true,
@@ -252,7 +270,7 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, onDone: () -> Un
                 )
                 AssistChip(
                     onClick = { showTime = true },
-                    label = { Text("${dateTime.format(TIME_FMT)} น.") },
+                    label = { Text("${dateTime.format(TIME_FORMAT)} น.") },
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

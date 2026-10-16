@@ -6,6 +6,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// CI numbers each build so a newer APK always installs as an update of the older one.
+val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+
+// The release key never lives in the repo: CI decodes it from GitHub Actions secrets
+// (see README) and passes its location and password through the environment.
+val releaseKeystore: String? = System.getenv("SIGNING_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.nwx.expensetracker"
     compileSdk = 35
@@ -14,30 +21,30 @@ android {
         applicationId = "com.nwx.expensetracker"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNumber
+        versionName = "1.0.$buildNumber"
     }
 
-    // A fixed key so every CI build can be installed over the previous one
-    // without uninstalling (which would wipe the expense data).
     signingConfigs {
-        create("personal") {
-            storeFile = rootProject.file("keystore/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        releaseKeystore?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: "expense-tracker"
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: System.getenv("SIGNING_STORE_PASSWORD")
+            }
         }
     }
 
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("personal")
-        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("personal")
+            // Without the release key (local builds, or CI before the secrets are added) use the
+            // machine's debug key so the APK still installs. Such an APK can't update, or be
+            // updated by, one signed with the release key.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

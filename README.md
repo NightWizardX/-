@@ -25,26 +25,60 @@
 - วันที่แบบไทย (พ.ศ.), รองรับโหมดมืด, ใช้สีตามธีมเครื่อง (Android 12+)
 
 ## ติดตั้งบนมือถือ
-1. เปิดหน้า **Releases** ของ repo นี้บนมือถือ → `Expense Tracker (latest build)` → ดาวน์โหลด `expense-tracker.apk`
-   (หรือแท็บ **Actions** → รันล่าสุด → Artifacts `expense-tracker-apk`)
-2. เปิดไฟล์ APK แล้วอนุญาต "ติดตั้งแอปที่ไม่รู้จัก" สำหรับเบราว์เซอร์/ไฟล์
-3. อัปเดตเวอร์ชันใหม่: ติดตั้งทับได้เลย ข้อมูลไม่หาย (ทุก build เซ็นด้วยคีย์เดียวกันใน `keystore/`)
+1. เปิดลิงก์นี้บนมือถือ (ได้ APK เวอร์ชันล่าสุดเสมอ):
+   https://github.com/NightWizardX/-/releases/latest/download/expense-tracker.apk
+   หรือเข้าหน้า **Releases** ของ repo แล้วดาวน์โหลด `expense-tracker.apk`
+2. เปิดไฟล์ APK แล้วอนุญาต "ติดตั้งแอปที่ไม่รู้จัก" ให้เบราว์เซอร์หรือแอปไฟล์
+3. อัปเดตเวอร์ชันใหม่: ดาวน์โหลดจากลิงก์เดิมแล้วติดตั้งทับ ข้อมูลไม่หาย
+   (ต้องตั้งค่าคีย์เซ็นแอปตามหัวข้อถัดไปก่อน)
 
 ต้องการ Android 8.0 (API 26) ขึ้นไป
 
-## Build เอง
+## ตั้งค่าคีย์เซ็นแอป (ทำครั้งเดียว)
+Android จะยอมติดตั้งทับ (อัปเดต) ก็ต่อเมื่อ APK ใหม่เซ็นด้วยคีย์เดียวกับตัวเดิม
+คีย์นี้เป็นความลับและ repo นี้เป็นสาธารณะ จึงเก็บไว้ใน GitHub Secrets ไม่ใช่ในโค้ด
+
+1. ใน repo บน GitHub: **Settings → Secrets and variables → Actions → New repository secret**
+2. เพิ่ม 2 ค่า:
+   - `SIGNING_KEYSTORE_BASE64` = ไฟล์ keystore (PKCS12) ที่แปลงเป็น base64
+   - `SIGNING_PASSWORD` = รหัสผ่านของ keystore
+3. แท็บ **Actions → Build APK → Run workflow** เพื่อ build APK ที่เซ็นด้วยคีย์นี้
+
+ถ้ายังไม่ตั้งค่า แอปก็ยัง build และติดตั้งได้ แต่แต่ละ build จะเซ็นด้วยคีย์ชั่วคราวคนละอัน
+ต้องถอนแอปเก่าก่อนลงตัวใหม่ (ข้อมูลในแอปจะหาย ให้ **ส่งออก CSV** ไว้ก่อนแล้วนำเข้าหลังติดตั้ง)
+
+สร้าง keystore เองได้ด้วย JDK:
 ```bash
-./gradlew assembleRelease      # ได้ไฟล์ app/build/outputs/apk/release/app-release.apk
-./gradlew testReleaseUnitTest  # unit tests
+keytool -genkeypair -keystore release.p12 -storetype PKCS12 -alias expense-tracker \
+        -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=Expense Tracker"
+base64 -w0 release.p12   # คัดลอกผลลัพธ์ไปใส่ SIGNING_KEYSTORE_BASE64
 ```
-หรือเปิดโฟลเดอร์นี้ด้วย Android Studio แล้วกด Run
+เก็บไฟล์ keystore และรหัสผ่านไว้ในที่ปลอดภัย ถ้าทำหาย APK ใหม่จะติดตั้งทับตัวเดิมไม่ได้
+
+## ความปลอดภัยและความเป็นส่วนตัว
+- แอปไม่ขอสิทธิ์อินเทอร์เน็ต ข้อมูลไม่ออกจากเครื่อง ยกเว้นตอนที่คุณส่งออก CSV เอง
+- ข้อมูลอยู่ในพื้นที่ส่วนตัวของแอป แอปอื่นอ่านไม่ได้ ระบบสำรองข้อมูลของ Android
+  อาจสำรองไว้ใน Google Drive ของคุณ (เข้ารหัสเมื่อเครื่องตั้งรหัสล็อกหน้าจอไว้)
+- ไฟล์ CSV ที่ส่งออกไม่ได้เข้ารหัส เก็บไว้ในที่ที่ไว้ใจได้
+- ส่งออก CSV: ช่องที่ขึ้นต้นด้วย `= + - @` จะมี `'` นำหน้า กันสูตรอันตรายทำงานเมื่อเปิดใน Excel/Sheets
+  (นำเข้ากลับมาแอปจะตัด `'` ออกให้เอง)
+- นำเข้า CSV: จำกัดขนาด 10 MB ตรวจรูปแบบจำนวนเงินอย่างเข้มงวด และจำกัดความยาวข้อความ
+- คีย์เซ็นแอปอยู่ใน GitHub Secrets เท่านั้น ไม่อยู่ใน repo
+
+## Build เอง
+- **Android Studio:** เปิดโฟลเดอร์นี้แล้วกด Run (ใช้ Gradle ตาม `gradle/wrapper/gradle-wrapper.properties`)
+- **Command line:** ติดตั้ง Gradle 8.11+ และ Android SDK แล้วรัน
+  ```bash
+  gradle assembleRelease      # ได้ไฟล์ app/build/outputs/apk/release/app-release.apk
+  gradle testReleaseUnitTest  # unit tests
+  ```
+  ถ้าต้องการ `./gradlew` ให้รัน `gradle wrapper` หนึ่งครั้ง
 
 ## โครงสร้างโค้ด
-- `data/Repository.kt` – SQLite (ตาราง categories, expenses), การตั้งค่า, CSV
+- `data/Models.kt` – โมเดลข้อมูล, ตัวอ่าน/เขียน CSV, การกันสูตรใน CSV
+- `data/Repository.kt` – SQLite (ตาราง categories, expenses), การตั้งค่า, ส่งออก/นำเข้า CSV
 - `data/Stats.kt` – ช่วงเวลา (วัน/สัปดาห์/เดือน/ช่วง), การคำนวณสรุป, รูปแบบเงิน/วันที่ไทย
 - `ui/DashboardScreen.kt` – หน้าแดชบอร์ด
 - `ui/EditExpenseScreen.kt` – หน้าบันทึก/แก้ไขรายจ่าย
 - `ui/SettingsScreen.kt` – ตั้งค่า งบประมาณ หมวดหมู่ สำรองข้อมูล
-- `ui/Components.kt` – ธีม กราฟแท่ง กราฟโดนัท
-
-> หมายเหตุ: `keystore/debug.keystore` เป็นคีย์สำหรับใช้ส่วนตัว (รหัส `android`) เพื่อให้ติดตั้งทับได้ ไม่เหมาะกับการเผยแพร่บน Play Store
+- `ui/Components.kt` – ธีม กราฟแท่ง กราฟโดนัท แอนิเมชัน

@@ -87,6 +87,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,6 +113,7 @@ import com.nwx.expensetracker.data.Money
 import com.nwx.expensetracker.data.Period
 import com.nwx.expensetracker.data.PeriodType
 import com.nwx.expensetracker.data.Repository
+import com.nwx.expensetracker.data.TIME_FORMAT
 import com.nwx.expensetracker.data.ThaiDate
 import com.nwx.expensetracker.data.categoryOf
 import com.nwx.expensetracker.data.toLocalDateTime
@@ -121,10 +123,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 import kotlin.math.abs
-
-private val TIME_FMT = DateTimeFormatter.ofPattern("HH:mm")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -789,21 +788,31 @@ private fun SwipeableExpenseRow(
     onEdit: (Long) -> Unit,
     onDelete: (Expense) -> Unit,
 ) {
+    // The swipe state is created once, so read the latest row/callback through updated state.
+    val currentExpense by rememberUpdatedState(e)
+    val currentOnDelete by rememberUpdatedState(onDelete)
     // confirmValueChange may be called more than once per swipe; delete only once.
     val fired = remember { BooleanArray(1) }
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                if (!fired[0]) {
-                    fired[0] = true
-                    onDelete(e)
+            when (value) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    if (!fired[0]) {
+                        fired[0] = true
+                        currentOnDelete(currentExpense)
+                    }
+                    true
                 }
-                true
-            } else {
-                false
+                SwipeToDismissBoxValue.Settled -> true
+                SwipeToDismissBoxValue.StartToEnd -> false
             }
         },
     )
+    // "Undo" re-inserts the row under the same LazyColumn key, which restores its saved
+    // (dismissed) swipe state; bring it back into view.
+    LaunchedEffect(Unit) {
+        if (state.currentValue != SwipeToDismissBoxValue.Settled) state.snapTo(SwipeToDismissBoxValue.Settled)
+    }
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = false,
@@ -855,7 +864,7 @@ private fun ExpenseRow(e: Expense, d: DashboardData, onEdit: (Long) -> Unit) {
                 Text(e.note.ifBlank { cat.name }, maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
             supportingContent = {
-                Text("${cat.name} · ${e.time.toLocalDateTime().format(TIME_FMT)} น.")
+                Text("${cat.name} · ${e.time.toLocalDateTime().format(TIME_FORMAT)} น.")
             },
             trailingContent = {
                 Text(

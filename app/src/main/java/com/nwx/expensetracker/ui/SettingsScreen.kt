@@ -66,8 +66,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.nwx.expensetracker.data.CATEGORY_COLORS
 import com.nwx.expensetracker.data.Category
+import com.nwx.expensetracker.data.MAX_CATEGORY_NAME_LENGTH
+import com.nwx.expensetracker.data.MAX_EMOJI_LENGTH
 import com.nwx.expensetracker.data.Money
 import com.nwx.expensetracker.data.Repository
+import com.nwx.expensetracker.data.safeTake
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -86,7 +89,8 @@ fun SettingsScreen(onBack: () -> Unit, onCategories: () -> Unit) {
         scope.launch {
             val msg = withContext(Dispatchers.IO) {
                 runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { repo.exportCsv(it) } ?: 0
+                    // "wt" truncates: overwriting a longer file must not leave its old tail behind.
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { repo.exportCsv(it) } ?: 0
                 }.fold({ "ส่งออก $it รายการเรียบร้อย" }, { "ส่งออกไม่สำเร็จ: ${it.message}" })
             }
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
@@ -134,7 +138,13 @@ fun SettingsScreen(onBack: () -> Unit, onCategories: () -> Unit) {
                     )
                     Spacer(Modifier.width(8.dp))
                     IconButton(onClick = {
-                        val v = Money.parse(budgetText) ?: 0L
+                        val parsed = Money.parse(budgetText)
+                        // Only an empty field turns the budget off; a typo like "5000.." must not.
+                        if (parsed == null && budgetText.isNotBlank()) {
+                            Toast.makeText(context, "จำนวนเงินไม่ถูกต้อง", Toast.LENGTH_SHORT).show()
+                            return@IconButton
+                        }
+                        val v = parsed ?: 0L
                         scope.launch(Dispatchers.IO) { repo.monthlyBudget = v }
                         Toast.makeText(
                             context,
@@ -281,7 +291,7 @@ private fun CategoryDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = emoji,
-                        onValueChange = { emoji = it.take(8) },
+                        onValueChange = { emoji = safeTake(it, MAX_EMOJI_LENGTH) },
                         label = { Text("อีโมจิ") },
                         singleLine = true,
                         modifier = Modifier.width(90.dp),
@@ -289,7 +299,7 @@ private fun CategoryDialog(
                     Spacer(Modifier.width(8.dp))
                     OutlinedTextField(
                         value = name,
-                        onValueChange = { name = it },
+                        onValueChange = { name = safeTake(it, MAX_CATEGORY_NAME_LENGTH) },
                         label = { Text("ชื่อหมวด") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),

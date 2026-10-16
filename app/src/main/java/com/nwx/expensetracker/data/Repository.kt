@@ -7,15 +7,13 @@ import android.database.sqlite.SQLiteOpenHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.math.BigDecimal
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 private val DEFAULT_CATEGORIES = listOf(
     Triple("อาหาร", "🍜", 0xFFFF7043),
@@ -221,14 +219,14 @@ class Repository private constructor(context: Context) {
         val cats = categories().associateBy { it.id }
         val all = allExpenses().reversed()
         out.bufferedWriter(Charsets.UTF_8).use { w ->
-            w.write("﻿") // BOM so Excel / Google Sheets read Thai correctly
+            w.write("\uFEFF") // BOM so Excel / Google Sheets read Thai correctly
             w.write("date,time,amount,category,emoji,note\n")
             for (e in all) {
-                val dt = LocalDateTime.ofInstant(Instant.ofEpochMilli(e.time), ZoneId.systemDefault())
+                val dt = e.time.toLocalDateTime()
                 val cat = cats[e.categoryId]
                 val row = listOf(
                     dt.toLocalDate().toString(),
-                    dt.toLocalTime().format(TIME_FMT),
+                    dt.toLocalTime().format(TIME_FORMAT),
                     BigDecimal.valueOf(e.amount, 2).toPlainString(),
                     cat?.name ?: "",
                     cat?.emoji ?: "",
@@ -241,23 +239,33 @@ class Repository private constructor(context: Context) {
         return all.size
     }
 
-    /** Imports rows exported by [exportCsv]. Rows that already exist are skipped. Returns the number of rows added. */
+    /**
+     * Imports rows exported by [exportCsv]. Rows that already exist are skipped. Returns the number of rows added.
+     * Throws [IllegalArgumentException] with a user-facing message if the file is too large.
+     */
     fun importCsv(input: InputStream): Int {
-        val text = input.bufferedReader(Charsets.UTF_8).use { it.readText() }.removePrefix("﻿")
+        val text = input.readTextLimited(MAX_IMPORT_BYTES).removePrefix("\uFEFF")
         val rows = parseCsv(text).filter { r -> r.any { it.isNotBlank() } }
         val db = helper.writableDatabase
         val catsByName = categories().associateBy { it.name }.toMutableMap()
+        // Matching rows that were already in the database before this import and are not yet
+        // accounted for by a row in the file. Two identical rows in the file (e.g. two coffees in
+        // the same minute) must both be imported unless the database already has two.
+        val unclaimed = HashMap<String, Int>()
         var added = 0
         db.beginTransaction()
         try {
             for (r in rows) {
                 if (r.size < 3 || r[0].trim().equals("date", ignoreCase = true)) continue
                 val date = runCatching { LocalDate.parse(r[0].trim()) }.getOrNull() ?: continue
+                if (date.year !in 1900..2200) continue
                 val time = runCatching { LocalTime.parse(r[1].trim()) }.getOrDefault(LocalTime.NOON)
                 val amount = Money.parse(r[2]) ?: continue
-                val catName = r.getOrNull(3)?.trim().orEmpty().ifEmpty { "อื่นๆ" }
-                val emoji = r.getOrNull(4)?.trim().orEmpty().ifEmpty { "📦" }
-                val note = r.getOrNull(5).orEmpty()
+                val catName = safeTake(unguardCsvCell(r.getOrNull(3).orEmpty()).trim(), MAX_CATEGORY_NAME_LENGTH)
+                    .ifEmpty { "อื่นๆ" }
+                val emoji = safeTake(unguardCsvCell(r.getOrNull(4).orEmpty()).trim(), MAX_EMOJI_LENGTH)
+                    .ifEmpty { "📦" }
+                val note = safeTake(unguardCsvCell(r.getOrNull(5).orEmpty()), MAX_NOTE_LENGTH)
                 val cat = catsByName.getOrPut(catName) {
                     val c = Category(
                         name = catName,
@@ -266,12 +274,18 @@ class Repository private constructor(context: Context) {
                     )
                     c.copy(id = saveCategory(c))
                 }
-                val ms = LocalDateTime.of(date, time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                val exists = db.rawQuery(
-                    "SELECT 1 FROM expenses WHERE time = ? AND amount = ? AND category_id = ? AND note = ? LIMIT 1",
-                    arrayOf(ms.toString(), amount.toString(), cat.id.toString(), note)
-                ).use { it.moveToFirst() }
-                if (exists) continue
+                val ms = LocalDateTime.of(date, time).toMillis()
+                val key = "$ms|$amount|${cat.id}|$note"
+                val left = unclaimed.getOrPut(key) {
+                    db.rawQuery(
+                        "SELECT COUNT(*) FROM expenses WHERE time = ? AND amount = ? AND category_id = ? AND note = ?",
+                        arrayOf(ms.toString(), amount.toString(), cat.id.toString(), note)
+                    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+                }
+                if (left > 0) {
+                    unclaimed[key] = left - 1
+                    continue
+                }
                 db.insert("expenses", null, ContentValues().apply {
                     put("amount", amount)
                     put("category_id", cat.id)
@@ -289,7 +303,8 @@ class Repository private constructor(context: Context) {
     }
 
     companion object {
-        private val TIME_FMT = DateTimeFormatter.ofPattern("HH:mm")
+        /** Exports hold ~60 bytes per expense, so this allows well over 100,000 rows. */
+        private const val MAX_IMPORT_BYTES = 10_000_000
 
         @Volatile
         private var instance: Repository? = null
@@ -299,4 +314,17 @@ class Repository private constructor(context: Context) {
                 instance ?: Repository(context).also { instance = it }
             }
     }
+}
+
+/** Reads the whole stream as UTF-8, refusing anything larger than [maxBytes] instead of running out of memory. */
+private fun InputStream.readTextLimited(maxBytes: Int): String {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (true) {
+        val n = read(buffer)
+        if (n < 0) break
+        out.write(buffer, 0, n)
+        require(out.size() <= maxBytes) { "ไฟล์ใหญ่เกินไป (สูงสุด ${maxBytes / 1_000_000} MB)" }
+    }
+    return out.toString(Charsets.UTF_8.name())
 }

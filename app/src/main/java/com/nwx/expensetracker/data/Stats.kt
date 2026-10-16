@@ -3,6 +3,7 @@ package com.nwx.expensetracker.data
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -10,8 +11,10 @@ import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
+import java.util.Locale
 
 enum class PeriodType(val label: String) {
     DAY("วัน"),
@@ -65,16 +68,28 @@ data class Period(val type: PeriodType, val start: LocalDate, val end: LocalDate
     }
 }
 
+/** "HH:mm", shared by the UI and the CSV backup. */
+val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
 object Money {
+    // DecimalFormat is costly to build and not thread-safe; format() runs every frame of a count-up.
+    // Fixed symbols: "1,234.5" everywhere, matching what parse() accepts.
+    private val SYMBOLS = DecimalFormatSymbols(Locale.US)
+    private val FULL = ThreadLocal.withInitial { DecimalFormat("#,##0.##", SYMBOLS) }
+    private val SHORT = ThreadLocal.withInitial { DecimalFormat("#.#", SYMBOLS) }
+
+    /** Up to 12 digits of baht and 2 of satang, e.g. "1234", "12.5", ".75". No signs or exponents. */
+    private val AMOUNT = Regex("""\d{1,12}(\.\d{0,2})?|\.\d{1,2}""")
+
     fun format(satang: Long): String =
-        "฿" + DecimalFormat("#,##0.##").format(BigDecimal.valueOf(satang, 2))
+        "฿" + FULL.get()!!.format(BigDecimal.valueOf(satang, 2))
 
     /** Compact form for tight spaces, e.g. ฿1.2k */
     fun compact(satang: Long): String {
         val baht = satang / 100.0
         return when {
-            baht >= 1_000_000 -> "฿" + DecimalFormat("#.#").format(baht / 1_000_000) + "M"
-            baht >= 10_000 -> "฿" + DecimalFormat("#.#").format(baht / 1_000) + "k"
+            baht >= 1_000_000 -> "฿" + SHORT.get()!!.format(baht / 1_000_000) + "M"
+            baht >= 10_000 -> "฿" + SHORT.get()!!.format(baht / 1_000) + "k"
             else -> format(satang)
         }
     }
@@ -82,16 +97,16 @@ object Money {
     /** For pre-filling an input field: 12.5, 100 */
     fun input(satang: Long): String = BigDecimal.valueOf(satang, 2).stripTrailingZeros().toPlainString()
 
-    /** Parses "1,234.50" into satang. Returns null if invalid or not positive. */
+    /**
+     * Parses "1,234.50" into satang. Returns null if invalid or not positive.
+     * The strict format check runs before BigDecimal so input like "1E999999999" from an
+     * imported file can't make it allocate a gigantic number.
+     */
     fun parse(text: String): Long? {
         val clean = text.replace(",", "").replace("฿", "").trim()
-        if (clean.isEmpty()) return null
-        return try {
-            val v = BigDecimal(clean).movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact()
-            if (v > 0) v else null
-        } catch (e: Exception) {
-            null
-        }
+        if (!AMOUNT.matches(clean)) return null
+        val v = BigDecimal(clean).movePointRight(2).setScale(0, RoundingMode.UNNECESSARY).longValueExact()
+        return if (v > 0) v else null
     }
 }
 
@@ -148,7 +163,8 @@ data class DashboardData(
 
 private val UNKNOWN_CATEGORY = Category(id = -1, name = "ไม่ระบุหมวด", emoji = "❓", color = 0xFF9E9E9E.toInt(), hidden = true)
 
-fun categoryOf(id: Long, categories: Map<Long, Category>): Category = categories[id] ?: UNKNOWN_CATEGORY
+/** Keeps the real id for a missing category so filtering by it still matches its expenses. */
+fun categoryOf(id: Long, categories: Map<Long, Category>): Category = categories[id] ?: UNKNOWN_CATEGORY.copy(id = id)
 
 fun buildDashboard(
     period: Period,
@@ -187,9 +203,9 @@ fun buildBars(period: Period, expenses: List<Expense>): List<Bar> {
             times.forEach { (t, a) -> sums[t.hour] += a }
             (0 until 24).map { h ->
                 Bar(
-                    label = "%02d".format(h),
+                    label = String.format(Locale.ROOT, "%02d", h),
                     value = sums[h],
-                    detail = "%02d:00–%02d:59".format(h, h),
+                    detail = String.format(Locale.ROOT, "%02d:00–%02d:59", h, h),
                     showLabel = h % 6 == 0,
                 )
             }

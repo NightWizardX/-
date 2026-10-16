@@ -1,5 +1,6 @@
 package com.nwx.expensetracker
 
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -18,6 +19,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.nwx.expensetracker.data.Period
@@ -38,21 +41,69 @@ class MainActivity : ComponentActivity() {
             AppTheme { App() }
         }
     }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // configChanges keeps this activity alive through a dark-mode switch, so refresh the
+        // status/navigation bar icon colors for the new theme.
+        enableEdgeToEdge()
+    }
 }
 
 private sealed interface Screen {
-    data object Dashboard : Screen
-    data class Edit(val expenseId: Long?, val date: LocalDate) : Screen
-    data object Settings : Screen
-    data object Categories : Screen
+    /** Stable string form: saved across process death and used as the transition key. */
+    val route: String
+
+    data object Dashboard : Screen {
+        override val route = "dashboard"
+    }
+
+    data class Edit(val expenseId: Long?, val date: LocalDate) : Screen {
+        override val route: String get() = "edit/${expenseId ?: "new"}/$date"
+    }
+
+    data object Settings : Screen {
+        override val route = "settings"
+    }
+
+    data object Categories : Screen {
+        override val route = "categories"
+    }
+
+    companion object {
+        fun fromRoute(route: String): Screen? = when {
+            route == Dashboard.route -> Dashboard
+            route == Settings.route -> Settings
+            route == Categories.route -> Categories
+            route.startsWith("edit/") -> {
+                val parts = route.split('/')
+                runCatching { Edit(parts[1].toLongOrNull(), LocalDate.parse(parts[2])) }.getOrNull()
+            }
+            else -> null
+        }
+    }
 }
+
+// Android may kill the app while it is in the background (e.g. while the user checks a
+// receipt in another app); these savers bring back the same screen and period afterwards.
+private val StackSaver = listSaver<List<Screen>, String>(
+    save = { stack -> stack.map { it.route } },
+    restore = { routes -> routes.mapNotNull { Screen.fromRoute(it) }.ifEmpty { listOf(Screen.Dashboard) } },
+)
+
+private val PeriodSaver = listSaver<Period, String>(
+    save = { listOf(it.type.name, it.start.toString(), it.end.toString()) },
+    restore = { runCatching { Period(PeriodType.valueOf(it[0]), LocalDate.parse(it[1]), LocalDate.parse(it[2])) }.getOrNull() },
+)
 
 @Composable
 private fun App() {
     val context = LocalContext.current
     val repo = remember { Repository.get(context) }
-    var stack by remember { mutableStateOf(listOf<Screen>(Screen.Dashboard)) }
-    var period by remember { mutableStateOf(Period.of(repo.lastPeriodType, LocalDate.now())) }
+    var stack by rememberSaveable(stateSaver = StackSaver) { mutableStateOf(listOf<Screen>(Screen.Dashboard)) }
+    var period by rememberSaveable(stateSaver = PeriodSaver) {
+        mutableStateOf(Period.of(repo.lastPeriodType, LocalDate.now()))
+    }
     val dashboardListState = rememberLazyListState()
 
     fun push(screen: Screen) {
@@ -68,7 +119,7 @@ private fun App() {
     // Slide screens in from the right when going forward, back to the right when going back.
     AnimatedContent(
         targetState = stack,
-        contentKey = { it.last() },
+        contentKey = { it.last().route },
         transitionSpec = {
             val forward = targetState.size >= initialState.size
             if (forward) {
