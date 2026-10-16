@@ -202,6 +202,8 @@ class SlipParserTest {
         // Fee and balance lines never win; the fee label above its value counts too.
         assertEquals(9950L, parse("ค่าธรรมเนียม:\n10.00 บาท\nจำนวน:\n99.50 บาท").amount)
         assertEquals(9950L, parse("ยอดเงินคงเหลือ 15,000.00 บาท\nยอดโอน 99.50 บาท").amount)
+        assertEquals(9950L, parse("ยอดเงินที่ใช้ได้ 15,000.00 บาท\nยอดชำระ 99.50 บาท").amount)
+        assertEquals(9950L, parse("Available balance 15,000.00 THB\nAmount 99.50 THB").amount)
         // Without labels: the largest value in baht; dates and times are not money.
         assertEquals(30000L, parse("16.10.2569 14.23 น.\n300.00 บาท\n12.50").amount)
         assertNull(parse("ไม่มีตัวเลข").amount)

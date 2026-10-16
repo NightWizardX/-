@@ -175,7 +175,10 @@ object SlipParser {
     // ---- Amount -------------------------------------------------------------------------------
 
     private val AMOUNT_LABELS = listOf("จำนวน", "ำนวน", "ยอด", "amount", "total", "รวม", "ชำระ", "จ่าย")
-    private val NOT_AMOUNT = listOf("ธรรมเนียม", "fee", "คงเหลือ", "balance", "ส่วนลด", "discount", "แต้ม", "point")
+    /** Fees, balances, limits and discounts: amounts on a slip that weren't paid. */
+    private val NOT_AMOUNT = listOf(
+        "ธรรมเนียม", "fee", "คงเหลือ", "ใช้ได้", "balance", "available", "วงเงิน", "limit", "ส่วนลด", "discount", "แต้ม", "point",
+    )
 
     /** 1,250.00 or 1250.00: slips always show two decimals. */
     private val MONEY = Regex("""(?<![0-9.,])([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,12})\.([0-9]{2})(?![0-9]|[.,][0-9]| ?%| ?น\.)""")
