@@ -27,11 +27,13 @@ android {
 
     signingConfigs {
         releaseKeystore?.let { path ->
+            // trim(): a password pasted into GitHub Secrets easily picks up a trailing newline.
+            val storePass = System.getenv("SIGNING_STORE_PASSWORD")?.trim()
             create("release") {
                 storeFile = file(path)
-                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: "expense-tracker"
-                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: System.getenv("SIGNING_STORE_PASSWORD")
+                storePassword = storePass
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")?.trim() ?: "expense-tracker"
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")?.trim() ?: storePass
             }
         }
     }
