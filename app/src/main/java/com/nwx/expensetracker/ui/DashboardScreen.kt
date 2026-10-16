@@ -202,45 +202,47 @@ private fun PeriodTypeSelector(selected: PeriodType, onSelect: (PeriodType) -> U
 @Composable
 private fun PeriodNavigator(period: Period, onShift: (Int) -> Unit, onPick: () -> Unit, onToday: () -> Unit) {
     val today = LocalDate.now()
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { onShift(-1) }) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "ก่อนหน้า")
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { onShift(-1) }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "ก่อนหน้า")
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onPick)
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.DateRange,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    period.label(),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = { onShift(1) }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "ถัดไป")
+            }
         }
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .clickable(onClick = onPick)
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Filled.DateRange,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                period.label(),
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        IconButton(onClick = { onShift(1) }) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "ถัดไป")
-        }
-    }
-    if (period.type != PeriodType.RANGE && today !in period) {
-        TextButton(onClick = onToday, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                when (period.type) {
-                    PeriodType.DAY -> "กลับไปวันนี้"
-                    PeriodType.WEEK -> "กลับไปสัปดาห์นี้"
-                    else -> "กลับไปเดือนนี้"
-                }
-            )
+        if (period.type != PeriodType.RANGE && today !in period) {
+            TextButton(onClick = onToday, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    when (period.type) {
+                        PeriodType.DAY -> "กลับไปวันนี้"
+                        PeriodType.WEEK -> "กลับไปสัปดาห์นี้"
+                        else -> "กลับไปเดือนนี้"
+                    }
+                )
+            }
         }
     }
 }
@@ -454,7 +456,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.transactionList(
         return
     }
     val byDay = list.groupBy { it.time.toLocalDateTime().toLocalDate() }
-    byDay.forEach { (day, items) ->
+    byDay.forEach { (day, dayItems) ->
         item(key = "day-$day") {
             Row(Modifier.padding(top = 4.dp)) {
                 Text(
@@ -464,13 +466,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.transactionList(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    Money.format(items.sumOf { it.amount }),
+                    Money.format(dayItems.sumOf { it.amount }),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
         }
-        items(items, key = { it.id }) { e -> ExpenseRow(e, d, onEdit) }
+        items(dayItems, key = { it.id }) { e -> ExpenseRow(e, d, onEdit) }
     }
 }
 
