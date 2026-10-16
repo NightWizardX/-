@@ -227,6 +227,8 @@ fun BarChart(bars: List<Bar>, modifier: Modifier = Modifier, color: Color = Mate
             drawLine(gridColor, Offset(0f, chartHeight), Offset(size.width, chartHeight), strokeWidth = 2f)
             drawLine(gridColor, Offset(0f, chartHeight - usable), Offset(size.width, chartHeight - usable), strokeWidth = 1f)
 
+            // Right edge of the last label drawn; a label that would overlap it is skipped.
+            var labelsEnd = Float.NEGATIVE_INFINITY
             bars.forEachIndexed { i, bar ->
                 if (bar.value > 0) {
                     val delayFrac = if (n > 1) i.toFloat() / (n - 1) * 0.45f else 0f
@@ -253,7 +255,10 @@ fun BarChart(bars: List<Bar>, modifier: Modifier = Modifier, color: Color = Mate
                     val layout = measurer.measure(AnnotatedString(bar.label), labelStyle)
                     val lx = (i * slot + slot / 2 - layout.size.width / 2)
                         .coerceIn(0f, (size.width - layout.size.width).coerceAtLeast(0f))
-                    drawText(layout, topLeft = Offset(lx, chartHeight + 3.dp.toPx()))
+                    if (lx >= labelsEnd + 2.dp.toPx()) {
+                        drawText(layout, topLeft = Offset(lx, chartHeight + 3.dp.toPx()))
+                        labelsEnd = lx + layout.size.width
+                    }
                 }
             }
 

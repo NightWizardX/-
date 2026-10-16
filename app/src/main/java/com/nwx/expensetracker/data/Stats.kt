@@ -16,11 +16,13 @@ import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 
+/** [label] is kept short: five of them share one row on a small phone. */
 enum class PeriodType(val label: String) {
     DAY("วัน"),
     WEEK("สัปดาห์"),
     MONTH("เดือน"),
-    RANGE("ช่วงเวลา"),
+    YEAR("ปี"),
+    RANGE("ช่วง"),
 }
 
 /** An inclusive date range [start]..[end]. */
@@ -36,6 +38,7 @@ data class Period(val type: PeriodType, val start: LocalDate, val end: LocalDate
         PeriodType.DAY -> of(type, start.plusDays(n.toLong()))
         PeriodType.WEEK -> of(type, start.plusWeeks(n.toLong()))
         PeriodType.MONTH -> of(type, start.plusMonths(n.toLong()))
+        PeriodType.YEAR -> of(type, start.plusYears(n.toLong()))
         PeriodType.RANGE -> {
             val len = days.toLong() * n
             Period(type, start.plusDays(len), end.plusDays(len))
@@ -45,6 +48,7 @@ data class Period(val type: PeriodType, val start: LocalDate, val end: LocalDate
     fun label(): String = when (type) {
         PeriodType.DAY -> ThaiDate.long(start)
         PeriodType.MONTH -> ThaiDate.monthYear(start)
+        PeriodType.YEAR -> ThaiDate.year(start)
         PeriodType.WEEK, PeriodType.RANGE ->
             if (start == end) ThaiDate.short(start) else "${ThaiDate.short(start)} – ${ThaiDate.short(end)}"
     }
@@ -62,6 +66,10 @@ data class Period(val type: PeriodType, val start: LocalDate, val end: LocalDate
             PeriodType.MONTH -> {
                 val s = anchor.withDayOfMonth(1)
                 Period(type, s, s.plusMonths(1).minusDays(1))
+            }
+            PeriodType.YEAR -> {
+                val s = anchor.withDayOfYear(1)
+                Period(type, s, s.plusYears(1).minusDays(1))
             }
             PeriodType.RANGE -> Period(type, anchor.minusDays(29), anchor)
         }
@@ -129,6 +137,8 @@ object ThaiDate {
     fun dayMonth(d: LocalDate) = "${d.dayOfMonth} ${MONTHS_SHORT[d.monthValue - 1]}"
     fun monthYear(d: LocalDate) = "${MONTHS[d.monthValue - 1]} ${buddhistYear(d)}"
     fun monthShort(ym: YearMonth) = "${MONTHS_SHORT[ym.monthValue - 1]} ${(ym.year + 543) % 100}"
+    fun monthAbbr(ym: YearMonth) = MONTHS_SHORT[ym.monthValue - 1]
+    fun year(d: LocalDate) = "ปี ${buddhistYear(d)}"
     fun dowShort(d: LocalDate) = DOW_SHORT[d.dayOfWeek.value - 1]
 
     /** Header for a day in the transaction list. */
@@ -155,10 +165,13 @@ data class DashboardData(
     val total: Long,
     val prevTotal: Long,
     val avgPerDay: Long,
+    val avgPerMonth: Long,
     val byCategory: List<CategoryTotal>,
     val bars: List<Bar>,
     val categories: Map<Long, Category>,
     val monthlyBudget: Long,
+    /** Budget for the period shown: the monthly budget for a month, 12x it for a year, 0 otherwise. */
+    val periodBudget: Long,
 )
 
 private val UNKNOWN_CATEGORY = Category(id = -1, name = "ไม่ระบุหมวด", emoji = "❓", color = 0xFF9E9E9E.toInt(), hidden = true)
@@ -180,6 +193,11 @@ fun buildDashboard(
         today in period -> ChronoUnit.DAYS.between(period.start, today).toInt() + 1
         else -> period.days
     }
+    val firstMonth = YearMonth.from(period.start)
+    val elapsedMonths = ChronoUnit.MONTHS.between(
+        firstMonth,
+        YearMonth.from(if (today in period) today else period.end),
+    ).toInt() + 1
     val byCategory = expenses.groupBy { it.categoryId }
         .map { (id, list) -> CategoryTotal(categoryOf(id, categories), list.sumOf { it.amount }, list.size) }
         .sortedByDescending { it.total }
@@ -188,10 +206,16 @@ fun buildDashboard(
         total = total,
         prevTotal = prevTotal,
         avgPerDay = total / elapsedDays.coerceAtLeast(1),
+        avgPerMonth = total / elapsedMonths.coerceAtLeast(1),
         byCategory = byCategory,
         bars = buildBars(period, expenses),
         categories = categories,
         monthlyBudget = monthlyBudget,
+        periodBudget = when (period.type) {
+            PeriodType.MONTH -> monthlyBudget
+            PeriodType.YEAR -> monthlyBudget * 12
+            else -> 0L
+        },
     )
 }
 
@@ -226,12 +250,14 @@ fun buildBars(period: Period, expenses: List<Expense>): List<Bar> {
         else -> {
             val byMonth = times.groupBy({ YearMonth.from(it.first) }, { it.second }).mapValues { it.value.sum() }
             val first = YearMonth.from(period.start)
-            val count = ChronoUnit.MONTHS.between(first, YearMonth.from(period.end)).toInt() + 1
-            val step = (count + 5) / 6
+            val last = YearMonth.from(period.end)
+            val count = ChronoUnit.MONTHS.between(first, last).toInt() + 1
+            // A year shows every month (the chart skips labels that would overlap); longer ranges thin out.
+            val step = if (period.type == PeriodType.YEAR) 1 else (count + 5) / 6
             (0 until count).map { i ->
                 val ym = first.plusMonths(i.toLong())
                 Bar(
-                    label = ThaiDate.monthShort(ym),
+                    label = if (first.year == last.year) ThaiDate.monthAbbr(ym) else ThaiDate.monthShort(ym),
                     value = byMonth[ym] ?: 0L,
                     detail = ThaiDate.monthYear(ym.atDay(1)),
                     showLabel = i % step == 0,

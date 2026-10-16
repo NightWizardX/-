@@ -308,7 +308,7 @@ private fun PeriodTypeSelector(selected: PeriodType, onSelect: (PeriodType) -> U
                 onClick = { onSelect(type) },
                 shape = SegmentedButtonDefaults.itemShape(i, types.size),
                 icon = {},
-            ) { Text(type.label, maxLines = 1) }
+            ) { Text(type.label, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
         }
     }
 }
@@ -365,6 +365,7 @@ private fun PeriodNavigator(period: Period, onShift: (Int) -> Unit, onPick: () -
                     when (period.type) {
                         PeriodType.DAY -> "กลับไปวันนี้"
                         PeriodType.WEEK -> "กลับไปสัปดาห์นี้"
+                        PeriodType.YEAR -> "กลับไปปีนี้"
                         else -> "กลับไปเดือนนี้"
                     }
                 )
@@ -394,12 +395,13 @@ private fun prevName(type: PeriodType) = when (type) {
     PeriodType.DAY -> "เมื่อวาน"
     PeriodType.WEEK -> "สัปดาห์ก่อน"
     PeriodType.MONTH -> "เดือนก่อน"
+    PeriodType.YEAR -> "ปีก่อน"
     PeriodType.RANGE -> "ช่วงก่อนหน้า"
 }
 
 private fun moodEmoji(d: DashboardData, period: Period): String {
-    if (period.type == PeriodType.MONTH && d.monthlyBudget > 0) {
-        val ratio = d.total.toFloat() / d.monthlyBudget
+    if (d.periodBudget > 0) {
+        val ratio = d.total.toFloat() / d.periodBudget
         return when {
             ratio > 1f -> "😱"
             ratio > 0.8f -> "😬"
@@ -476,7 +478,10 @@ private fun SummaryCard(d: DashboardData, period: Period) {
                 Text(
                     buildString {
                         append("${d.expenses.size} รายการ")
-                        if (period.days > 1) append(" · เฉลี่ย ${Money.format(d.avgPerDay)}/วัน")
+                        when {
+                            period.type == PeriodType.YEAR -> append(" · เฉลี่ย ${Money.format(d.avgPerMonth)}/เดือน")
+                            period.days > 1 -> append(" · เฉลี่ย ${Money.format(d.avgPerDay)}/วัน")
+                        }
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = onHero.copy(alpha = 0.9f),
@@ -484,10 +489,12 @@ private fun SummaryCard(d: DashboardData, period: Period) {
                 Spacer(Modifier.height(10.dp))
                 ComparePill(d.total, d.prevTotal, prevName(period.type), onHero)
 
-                if (period.type == PeriodType.MONTH && d.monthlyBudget > 0) {
+                val budget = d.periodBudget
+                if (budget > 0) {
                     Spacer(Modifier.height(14.dp))
-                    val ratio = d.total.toFloat() / d.monthlyBudget
-                    val over = d.total > d.monthlyBudget
+                    val budgetName = if (period.type == PeriodType.YEAR) "งบทั้งปี" else "งบเดือนนี้"
+                    val ratio = d.total.toFloat() / budget
+                    val over = d.total > budget
                     val animRatio by animateFloatAsState(
                         targetValue = ratio.coerceIn(0f, 1f),
                         animationSpec = tween(1000, easing = FastOutSlowInEasing),
@@ -508,8 +515,8 @@ private fun SummaryCard(d: DashboardData, period: Period) {
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        if (over) "เกินงบ ${Money.format(d.total - d.monthlyBudget)} (งบ ${Money.format(d.monthlyBudget)})"
-                        else "งบเดือนนี้ ${Money.format(d.monthlyBudget)} · เหลือ ${Money.format(d.monthlyBudget - d.total)} (${(ratio * 100).toInt()}%)",
+                        if (over) "เกิน$budgetName ${Money.format(d.total - budget)} ($budgetName ${Money.format(budget)})"
+                        else "$budgetName ${Money.format(budget)} · เหลือ ${Money.format(budget - d.total)} (${(ratio * 100).toInt()}%)",
                         style = MaterialTheme.typography.bodySmall,
                         color = onHero,
                         fontWeight = if (over) FontWeight.Bold else FontWeight.Normal,

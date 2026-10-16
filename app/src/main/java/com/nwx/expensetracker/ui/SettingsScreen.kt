@@ -126,7 +126,7 @@ fun SettingsScreen(onBack: () -> Unit, onCategories: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SettingsCard("งบประมาณต่อเดือน", "แสดงแถบงบประมาณในหน้าสรุปรายเดือน (เว้นว่าง = ไม่ใช้งบ)") {
+            SettingsCard("งบประมาณต่อเดือน", "แสดงแถบงบในหน้าสรุปรายเดือน และรายปี (งบ × 12) เว้นว่าง = ไม่ใช้งบ") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = budgetText,
