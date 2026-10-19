@@ -37,7 +37,7 @@ class SlipParserTest {
         assertEquals(LocalTime.of(23, 35), info.time)
         assertEquals("MS. ANNA LEE", info.receiver)
         assertEquals("ค่ากาแฟ", info.memo)
-        assertEquals("ค่ากาแฟ · MS. ANNA LEE · กสิกรไทย", info.note())
+        assertEquals("ค่ากาแฟ", info.note()) // the memo alone, as on the slip
     }
 
     @Test
@@ -87,6 +87,20 @@ class SlipParserTest {
         assertEquals(Bank.TTB, info.bank)
         assertEquals("นาย ปิยะ ทองดี", info.receiver)
         assertEquals("ค่าข้าว", info.memo)
+    }
+
+    @Test
+    fun realKrungthaiSlip() {
+        // The time wrapped onto its own line; the memo is what the payer typed in the banking app.
+        val day = LocalDate.of(2026, 10, 19)
+        val info = SlipParser.parse(KTB_REAL, KTB_REAL_QR, day, day)
+        assertEquals(2400L, info.amount)
+        assertEquals(LocalDateTime.of(2026, 10, 19, 12, 57), info.date!!.atTime(info.time))
+        assertEquals(Bank.KTB, info.bank)
+        assertEquals("น.ส. สมศรี ใจงาม", info.receiver)
+        assertEquals("ขนม", info.memo)
+        assertEquals("ขนม", info.note()) // the app's บันทึกช่วยจำ says what the slip's does
+        assertFalse(SlipParser.needsThaiPass(info))
     }
 
     @Test
@@ -227,8 +241,34 @@ class SlipParserTest {
     fun noteSkipsMissingParts() {
         assertEquals("", SlipInfo(1, null, null, null, null, null).note())
         assertEquals("ไทยพาณิชย์", SlipInfo(1, null, null, Bank.SCB, null, null).note())
+        assertEquals("นาย ปิยะ ทองดี · ไทยพาณิชย์", SlipInfo(1, null, null, Bank.SCB, "นาย ปิยะ ทองดี", null).note())
         assertFalse(SlipParser.needsThaiPass(parse(GSB, GSB_QR)))
     }
+
+    /** Tesseract output for a real Krungthai NEXT slip; names, account numbers and reference changed. */
+    private val KTB_REAL = """
+๕ gia  =f Gi
+น 7%69 Krung
+=  OH?
+=   ๐  ๕=
+G  โอนเงินสําเร็จ
+รหัสอ้างอิง
+A1234b5678cc90ef1
+  จอาก
+"” บายสมชายเก”
+กรุงไทย
+XXX-X-XX123-4
+1-@  ไปยัง
+น.ส. สมศรี ใจงาม
+พร้อมเพย์
+% %%%% %%%)%5 67 8
+จํานวนเงิน          24.00 บาท
+ค่าธรรมเนียม                  0.00 บาท
+วันที่ทํารายการ           19 ต.ค. 2569 -
+12:57
+บันทึกช่วยจํา                     ขนม
+"""
+    private val KTB_REAL_QR = "0038000600000101030060217A1234b5678cc90ef15102TH9104ABCD"
 
     private val KPLUS = """
 โอนเจินสําเร็อ

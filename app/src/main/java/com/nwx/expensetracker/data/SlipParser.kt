@@ -43,8 +43,11 @@ data class SlipInfo(
     val receiver: String?,
     val memo: String?,
 ) {
-    /** A note for the expense, e.g. "ค่าข้าว · นาย ปิยะ ทองดี · กสิกรไทย". */
-    fun note(): String = listOfNotNull(memo, receiver, bank?.label).joinToString(" · ")
+    /**
+     * The expense's note: the memo (บันทึกช่วยจำ) exactly as typed in the banking app, so it matches
+     * the slip; without one, who was paid and from which bank ("นาย ปิยะ ทองดี · กสิกรไทย").
+     */
+    fun note(): String = memo ?: listOfNotNull(receiver, bank?.label).joinToString(" · ")
 }
 
 /**

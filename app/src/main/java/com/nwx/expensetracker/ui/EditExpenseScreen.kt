@@ -202,8 +202,11 @@ fun EditExpenseScreen(expenseId: Long?, defaultDate: LocalDate, slipUri: String?
         val slipText = safeTake(info.note(), MAX_NOTE_LENGTH)
         if (note.isBlank() || note == slipNote) note = slipText
         slipNote = slipText
-        // Paid this receiver before? Use the same category as last time.
-        info.receiver?.let { r -> withContext(Dispatchers.IO) { repo.categoryForNote(r) } }?.let { categoryId = it }
+        // Same memo (or receiver) as an earlier expense? Use that expense's category again. Otherwise
+        // a memo naming a category ("ค่าเดินทาง" → เดินทาง) picks it.
+        val earlier = withContext(Dispatchers.IO) { listOfNotNull(info.memo, info.receiver).firstNotNullOfOrNull { repo.categoryForNote(it) } }
+        val named = info.memo?.let { m -> categories.firstOrNull { !it.hidden && it.name.length >= 2 && it.name in m }?.id }
+        (earlier ?: named)?.let { categoryId = it }
         slip = info
     }
 
